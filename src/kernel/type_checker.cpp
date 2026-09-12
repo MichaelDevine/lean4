@@ -12,6 +12,7 @@ Author: Leonardo de Moura
 #include "runtime/flet.h"
 #include "util/lbool.h"
 #include "kernel/type_checker.h"
+#include "kernel/reduction_extension.h"
 #include "kernel/expr_maps.h"
 #include "kernel/instantiate.h"
 #include "kernel/kernel_exception.h"
@@ -454,6 +455,13 @@ expr type_checker::whnf_core(expr const & e, bool cheap_rec, bool cheap_proj) {
     if (it != m_st->m_whnf_core.end())
         return it->second;
 
+    if (auto r = try_reduction_extension(env(), m_lctx, e,
+                                         reduction_mode::core(cheap_rec, cheap_proj))) {
+        if (!cheap_rec && !cheap_proj)
+            m_st->m_whnf_core.insert(mk_pair(e, *r));
+        return *r;
+    }
+
     // do the actual work
     expr r;
     switch (e.kind()) {
@@ -690,6 +698,11 @@ expr type_checker::whnf(expr const & e) {
     auto it = m_st->m_whnf.find(e);
     if (it != m_st->m_whnf.end())
         return it->second;
+
+    if (auto r = try_reduction_extension(env(), m_lctx, e, reduction_mode::full())) {
+        m_st->m_whnf.insert(mk_pair(e, *r));
+        return *r;
+    }
 
     expr t = e;
     while (true) {

@@ -12,6 +12,7 @@ add_library(
   declaration.cpp
   environment.cpp
   type_checker.cpp
+  reduction_extension.cpp
   init_module.cpp
   expr_cache.cpp
   equiv_manager.cpp
