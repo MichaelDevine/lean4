@@ -4,6 +4,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 */
 #include <sycl/sycl.hpp>
 #include "library/reduction_sycl.h"
+#include "kernel/reduction_backend_error.h"
 
 namespace lean {
 
@@ -69,12 +70,19 @@ public:
     }
 };
 
-reduction_sycl_backend::reduction_sycl_backend():m_imp(new imp()) {}
+reduction_sycl_backend::reduction_sycl_backend() = default;
 reduction_sycl_backend::~reduction_sycl_backend() = default;
 
 reduction::outcome reduction_sycl_backend::operator()(
     std::vector<reduction::instruction> const & code, reduction::machine & state,
     std::vector<reduction::closure> & arguments, std::vector<reduction::binding> & bindings) {
-    return (*m_imp)(code, state, arguments, bindings);
+    try {
+        // Create the device lazily: an unavailable GPU is an execution outcome,
+        // so the installed extension can report it and take the CPU path.
+        if (!m_imp) m_imp.reset(new imp());
+        return (*m_imp)(code, state, arguments, bindings);
+    } catch (sycl::exception const & error) {
+        throw reduction_backend_error(error.what());
+    }
 }
 }

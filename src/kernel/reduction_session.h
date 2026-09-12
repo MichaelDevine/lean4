@@ -29,6 +29,7 @@ public:
     reduction::machine const & state() const { return m_machine; }
     std::size_t argument_capacity() const { return m_arguments.size(); }
     std::size_t binding_capacity() const { return m_bindings.size(); }
+    std::size_t program_size() const { return m_code.size(); }
 
     void resize_workspace(std::size_t arguments, std::size_t bindings) {
         if (arguments < m_machine.m_num_arguments || bindings < m_machine.m_num_bindings)

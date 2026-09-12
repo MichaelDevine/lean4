@@ -12,7 +12,8 @@ namespace lean {
 /** Optional GPU backend, compiled separately from Lean's host runtime.
     Neither SYCL nor Lean object types cross this boundary. Device selection
     uses SYCL's GPU selector (and runtime configuration), never a CPU fallback.
-    Exceptions propagate to the session's transactional submission boundary.
+    Device creation is lazy; platform exceptions become reduction_backend_error
+    at the session's transactional submission boundary.
 
     This initial transport uploads each submission. Persistent device storage,
     batching and integration into the type checker remain unfinished work. */
