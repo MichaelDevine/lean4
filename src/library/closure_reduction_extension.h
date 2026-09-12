@@ -14,6 +14,8 @@ namespace lean {
 struct reduction_workspace {
     std::size_t m_arguments;
     std::size_t m_bindings;
+    std::size_t m_frames = 0;
+    std::size_t m_values = 0;
 };
 
 enum class reduction_attempt {
@@ -45,6 +47,12 @@ class closure_reduction_extension : public reduction_extension {
         auto const & state = session.state();
         if (workspace->m_arguments < state.m_num_arguments ||
             workspace->m_bindings < state.m_num_bindings ||
+            workspace->m_frames < state.m_num_frames ||
+            workspace->m_values < state.m_num_values ||
+            (reason == reduction::outcome::need_frames &&
+             workspace->m_frames <= session.frame_capacity()) ||
+            (reason == reduction::outcome::need_values &&
+             workspace->m_values <= session.value_capacity()) ||
             (reason == reduction::outcome::need_arguments &&
              workspace->m_arguments <= session.argument_capacity()) ||
             (reason == reduction::outcome::need_bindings &&
@@ -52,7 +60,8 @@ class closure_reduction_extension : public reduction_extension {
             m_last = reduction_attempt::invalid_admission;
             return false;
         }
-        session.resize_workspace(workspace->m_arguments, workspace->m_bindings);
+        session.resize_workspace(workspace->m_arguments, workspace->m_bindings,
+                                 workspace->m_frames, workspace->m_values);
         return true;
     }
 
@@ -62,15 +71,14 @@ public:
     reduction_attempt last_attempt() const { return m_last; }
     std::string const & device_error() const { return m_device_error; }
 
-    optional<expr> reduce(environment const &, local_ctx const &, expr const & e,
-                          reduction_mode) override {
+    optional<expr> reduce(environment const & env, local_ctx const &, expr const & e,
+                          reduction_mode mode) override {
         m_last = reduction_attempt::declined;
         m_device_error.clear();
         try {
-            // The current beta/let/alias fragment has the same semantics in
-            // full and core modes. It never unfolds a constant, projection or
-            // recursor; those modes will matter when support is extended.
-            reduction_session session(e, 0, 0);
+            // Numeric primitive lowering is full-mode only. Neither mode
+            // unfolds general constants, projections or recursors yet.
+            reduction_session session(e, 0, 0, mode, &env);
             if (!admit(session, reduction::outcome::running)) return none_expr();
             while (true) {
                 auto status = session.advance(m_backend);
@@ -83,6 +91,8 @@ public:
                 case reduction::outcome::running:
                 case reduction::outcome::need_arguments:
                 case reduction::outcome::need_bindings:
+                case reduction::outcome::need_frames:
+                case reduction::outcome::need_values:
                     if (!admit(session, status)) return none_expr();
                     break;
                 case reduction::outcome::unsupported:

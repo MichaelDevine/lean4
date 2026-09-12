@@ -18,13 +18,14 @@ struct backend_control {
     unsigned calls = 0;
     unsigned fail = 0;
     outcome operator()(std::vector<instruction> const & code, machine & state,
-                        std::vector<closure> & arguments, std::vector<binding> & bindings) {
+                        std::vector<closure> & arguments, std::vector<binding> & bindings,
+                        arithmetic_workspace & arithmetic) {
         ++calls;
         if (fail == 1) throw reduction_backend_error("injected device failure");
         if (fail == 2) throw std::bad_alloc();
         if (fail == 3) { state.m_control.m_code = no_binding; return outcome::complete; }
         if (fail == 4) throw std::logic_error("unexpected backend defect");
-        return reduction_cpu_backend()(code, state, arguments, bindings);
+        return reduction_cpu_backend()(code, state, arguments, bindings, arithmetic);
     }
 };
 

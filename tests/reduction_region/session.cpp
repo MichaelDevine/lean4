@@ -24,14 +24,14 @@ int main() {
     session.resize_workspace(1, 0);
     require(session.advance(cpu) == outcome::need_bindings, "missing binding demand");
     require(is_bi_equal(session.reconstruct(), input), "suspended application changed");
-    auto failing = [](auto const &, auto & state, auto &, auto &) -> outcome {
+    auto failing = [](auto const &, auto & state, auto &, auto &, auto &) -> outcome {
         state.m_control.m_code = no_binding;
         throw std::runtime_error("injected submission failure");
     };
     bool failed = false;
     try { session.advance(failing); } catch (std::runtime_error const &) { failed = true; }
     require(failed && is_bi_equal(session.reconstruct(), input), "failure corrupted checkpoint");
-    auto invalid = [](auto const &, auto & state, auto &, auto &) {
+    auto invalid = [](auto const &, auto & state, auto &, auto &, auto &) {
         state.m_control.m_code = no_binding;
         return outcome::complete;
     };

@@ -5,7 +5,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 #pragma once
 #include <memory>
 #include <vector>
-#include "kernel/reduction_machine.h"
+#include "kernel/reduction_storage.h"
 
 namespace lean {
 
@@ -15,8 +15,9 @@ namespace lean {
     Device creation is lazy; platform exceptions become reduction_backend_error
     at the session's transactional submission boundary.
 
-    This initial transport uploads each submission. Persistent device storage,
-    batching and integration into the type checker remain unfinished work. */
+    This initial transport uploads each submission and evaluates one region
+    with one work-item. Exact nested arithmetic is integrated; cooperative
+    arithmetic, persistent device storage and batched regions remain open. */
 class reduction_sycl_backend {
     class imp;
     std::unique_ptr<imp> m_imp;
@@ -28,6 +29,7 @@ public:
     reduction::outcome operator()(std::vector<reduction::instruction> const & code,
                                   reduction::machine & state,
                                   std::vector<reduction::closure> & arguments,
-                                  std::vector<reduction::binding> & bindings);
+                                  std::vector<reduction::binding> & bindings,
+                                  reduction::arithmetic_workspace & arithmetic);
 };
 }
