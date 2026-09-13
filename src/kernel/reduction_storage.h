@@ -25,5 +25,16 @@ struct arithmetic_workspace {
     }
 };
 
+/** Borrowed synchronous submission. Each entry owns a disjoint mutable
+    candidate; code and literal inputs may be shared read-only. These host
+    references must not escape submit or be copied into a device kernel. */
+struct submission {
+    std::vector<instruction> const & m_code;
+    machine & m_state;
+    std::vector<closure> & m_arguments;
+    std::vector<binding> & m_bindings;
+    arithmetic_workspace m_arithmetic;
+};
+
 }
 }

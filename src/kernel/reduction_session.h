@@ -3,6 +3,7 @@ Copyright (c) 2026 Michael Devine. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 */
 #pragma once
+#include <unordered_set>
 #include "kernel/reduction_reify.h"
 #include "kernel/reduction_storage.h"
 
@@ -29,6 +30,51 @@ class reduction_session {
     std::vector<reduction::natural_limb> m_values;
     std::vector<reduction::arithmetic_frame> m_frames;
     std::size_t m_columns = 0;
+
+    struct candidate {
+        reduction::machine m_state;
+        std::vector<reduction::closure> m_arguments;
+        std::vector<reduction::binding> m_bindings;
+        std::vector<reduction::natural_limb> m_values;
+        std::vector<reduction::arithmetic_frame> m_frames;
+
+        explicit candidate(reduction_session const & s):m_state(s.m_machine),
+            m_arguments(s.m_arguments), m_bindings(s.m_bindings),
+            m_values(s.m_values), m_frames(s.m_frames) {}
+
+        reduction::submission request(reduction_session const & s) {
+            return {s.m_code, m_state, m_arguments, m_bindings,
+                    {s.m_literals, m_values, m_frames, s.m_columns}};
+        }
+    };
+
+    reduction::outcome commit(candidate & c, reduction::outcome status) {
+        using reduction::outcome;
+        switch (status) {
+        case outcome::running: case outcome::complete: case outcome::unsupported:
+        case outcome::need_arguments: case outcome::need_bindings:
+        case outcome::need_frames: case outcome::need_values: case outcome::need_columns:
+            break;
+        default:
+            return outcome::invalid;
+        }
+        auto const & next = c.m_state;
+        auto arithmetic = c.request(*this).m_arithmetic;
+        if (next.m_control.m_code >= m_code.size() ||
+            next.m_num_arguments > c.m_arguments.size() || next.m_num_bindings > c.m_bindings.size() ||
+            next.m_num_frames > c.m_frames.size() || next.m_num_values > c.m_values.size() ||
+            (next.m_has_value && !next.valid_reference(next.m_value, arithmetic.memory())) ||
+            (status == outcome::complete && (next.m_num_frames != 0 || next.m_num_arguments != 0)) ||
+            (next.m_control.m_env != reduction::no_binding &&
+             next.m_control.m_env >= next.m_num_bindings))
+            return outcome::invalid;
+        m_arguments.swap(c.m_arguments);
+        m_bindings.swap(c.m_bindings);
+        m_frames.swap(c.m_frames);
+        m_values.swap(c.m_values);
+        m_machine = next;
+        return status;
+    }
 public:
     reduction_session(expr const & root, std::size_t arguments, std::size_t bindings,
                       reduction_mode mode = reduction_mode::full(), environment const * env = nullptr):
@@ -66,37 +112,38 @@ public:
     }
 
     template<typename Backend> reduction::outcome advance(Backend & backend) {
-        auto next = m_machine;
-        auto arguments = m_arguments;
-        auto bindings = m_bindings;
-        auto frames = m_frames;
-        auto values = m_values;
-        reduction::arithmetic_workspace arithmetic{m_literals, values, frames, m_columns};
-        auto status = backend(m_code, next, arguments, bindings, arithmetic);
-        using reduction::outcome;
-        switch (status) {
-        case outcome::running: case outcome::complete: case outcome::unsupported:
-        case outcome::need_arguments: case outcome::need_bindings:
-        case outcome::need_frames: case outcome::need_values:
-        case outcome::need_columns:
-            break;
-        default:
-            return outcome::invalid;
-        }
-        if (next.m_control.m_code >= m_code.size() ||
-            next.m_num_arguments > arguments.size() || next.m_num_bindings > bindings.size() ||
-            next.m_num_frames > frames.size() || next.m_num_values > values.size() ||
-            (next.m_has_value && !next.valid_reference(next.m_value, arithmetic.memory())) ||
-            (status == outcome::complete && (next.m_num_frames != 0 || next.m_num_arguments != 0)) ||
-            (next.m_control.m_env != reduction::no_binding &&
-             next.m_control.m_env >= next.m_num_bindings))
-            return outcome::invalid;
-        m_arguments.swap(arguments);
-        m_bindings.swap(bindings);
-        m_frames.swap(frames);
-        m_values.swap(values);
-        m_machine = next;
-        return status;
+        candidate c(*this);
+        auto r = c.request(*this);
+        return commit(c, backend(r.m_code, r.m_state, r.m_arguments, r.m_bindings, r.m_arithmetic));
+    }
+
+    /** Execute independent captured regions together, preserving input order.
+        No cross-region mutable references or duplicate sessions are allowed.
+        An exception or malformed outcome count commits nothing. Individual
+        invalid outcomes leave that session unchanged; valid siblings can
+        still finish or save a resource continuation. There is no batch-size
+        ceiling or implicit scheduling policy here. */
+    template<typename Backend>
+    static std::vector<reduction::outcome> advance_batch(
+        std::vector<reduction_session *> const & sessions, Backend & backend) {
+        if (sessions.empty()) return {};
+        std::unordered_set<reduction_session *> distinct;
+        for (auto s : sessions)
+            if (!s || !distinct.insert(s).second)
+                throw std::invalid_argument("batch sessions must be nonnull and distinct");
+        std::vector<candidate> candidates;
+        candidates.reserve(sessions.size());
+        for (auto s : sessions) candidates.emplace_back(*s);
+        std::vector<reduction::submission> requests;
+        requests.reserve(sessions.size());
+        for (std::size_t i = 0; i < sessions.size(); ++i)
+            requests.push_back(candidates[i].request(*sessions[i]));
+        auto results = backend.submit(requests);
+        if (results.size() != sessions.size())
+            return std::vector<reduction::outcome>(sessions.size(), reduction::outcome::invalid);
+        for (std::size_t i = 0; i < sessions.size(); ++i)
+            results[i] = sessions[i]->commit(candidates[i], results[i]);
+        return results;
     }
 
     expr reconstruct() const {
@@ -135,6 +182,15 @@ struct reduction_cpu_backend {
                                 bindings.data(), bindings.size(), arithmetic.memory());
         } while (result == reduction::outcome::running);
         return result;
+    }
+
+    // Deterministic serial reference control, not a production CPU scheduler.
+    std::vector<reduction::outcome> submit(std::vector<reduction::submission> & requests) const {
+        std::vector<reduction::outcome> results;
+        results.reserve(requests.size());
+        for (auto & r : requests)
+            results.push_back((*this)(r.m_code, r.m_state, r.m_arguments, r.m_bindings, r.m_arithmetic));
+        return results;
     }
 };
 }
