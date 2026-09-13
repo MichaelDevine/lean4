@@ -452,14 +452,13 @@ expr type_checker::whnf_core(expr const & e, bool cheap_rec, bool cheap_proj) {
     }
 
     // check cache
-    auto it = m_st->m_whnf_core.find(e);
-    if (it != m_st->m_whnf_core.end())
-        return it->second;
+    if (auto r = m_st->m_whnf_core.find(e))
+        return *r;
 
     if (auto r = try_reduction_extension(env(), m_lctx, e,
                                          reduction_mode::core(cheap_rec, cheap_proj))) {
         if (!cheap_rec && !cheap_proj)
-            m_st->m_whnf_core.insert(mk_pair(e, *r));
+            m_st->m_whnf_core.insert(e, *r);
         return *r;
     }
 
@@ -516,7 +515,7 @@ expr type_checker::whnf_core(expr const & e, bool cheap_rec, bool cheap_proj) {
     }
 
     if (!cheap_rec && !cheap_proj) {
-        m_st->m_whnf_core.insert(mk_pair(e, r));
+        m_st->m_whnf_core.insert(e, r);
     }
     return r;
 }
@@ -725,12 +724,11 @@ expr type_checker::whnf(expr const & e) {
     }
 
     // check cache
-    auto it = m_st->m_whnf.find(e);
-    if (it != m_st->m_whnf.end())
-        return it->second;
+    if (auto r = m_st->m_whnf.find(e))
+        return *r;
 
     if (auto r = try_reduction_extension(env(), m_lctx, e, reduction_mode::full())) {
-        m_st->m_whnf.insert(mk_pair(e, *r));
+        m_st->m_whnf.insert(e, *r);
         return *r;
     }
 
@@ -738,16 +736,16 @@ expr type_checker::whnf(expr const & e) {
     while (true) {
         expr t1 = whnf_core(t);
         if (auto v = reduce_native(env(), t1)) {
-            m_st->m_whnf.insert(mk_pair(e, *v));
+            m_st->m_whnf.insert(e, *v);
             return *v;
         } else if (auto v = reduce_nat(t1)) {
-            m_st->m_whnf.insert(mk_pair(e, *v));
+            m_st->m_whnf.insert(e, *v);
             return *v;
         } else if (auto next_t = unfold_definition(t1)) {
             t = *next_t;
         } else {
             auto r = t1;
-            m_st->m_whnf.insert(mk_pair(e, r));
+            m_st->m_whnf.insert(e, r);
             return r;
         }
     }

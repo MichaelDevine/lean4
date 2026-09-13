@@ -99,7 +99,7 @@ invalidating the cache and causing O(2^n) behavior on conditional trees.
 
 /-- Configuration options for the structural simplifier. -/
 structure Config where
-  /-- Maximum number of steps that can be performed by the simplifier. -/
+  /-- Maximum number of steps that can be performed by the simplifier, 0 means no limit. -/
   maxSteps : Nat := 100_000
   /--
   Maximum depth of reentrant simplifier calls through dischargers.

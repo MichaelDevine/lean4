@@ -17,6 +17,7 @@ Author: Leonardo de Moura
 #include <lean/lean.h>
 #include "runtime/int.h"
 #include "runtime/debug.h"
+#include "runtime/hash.h"
 
 namespace lean {
 
@@ -77,6 +78,25 @@ public:
 #else
         return m_digits[0];
 #endif
+    }
+
+    /* Hash every significant limb without changing the historical hash above.
+       This is an in-memory hash: its value may differ between integer backends. */
+    uint64 content_hash() const {
+#ifdef LEAN_USE_GMP
+        size_t sz = mpz_size(m_val);
+        uint64 r = lean::hash(static_cast<uint64>(mpz_sgn(m_val) + 1), sz);
+        for (size_t i = 0; i < sz; ++i)
+            r = lean::hash(r, static_cast<uint64>(mpz_getlimbn(m_val, i)));
+#else
+        // mpn_compare ignores leading zero limbs, so do the same here.
+        size_t sz = m_size;
+        while (sz > 1 && m_digits[sz - 1] == 0) --sz;
+        uint64 r = lean::hash(static_cast<uint64>(m_sign), sz);
+        for (size_t i = 0; i < sz; ++i)
+            r = lean::hash(r, static_cast<uint64>(m_digits[i]));
+#endif
+        return r;
     }
 
     int sgn() const;

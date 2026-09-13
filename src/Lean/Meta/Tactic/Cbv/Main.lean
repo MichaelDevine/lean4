@@ -107,7 +107,7 @@ public register_builtin_option cbv.warning : Bool := {
 
 public register_builtin_option cbv.maxSteps : Nat := {
   defValue := 100_000
-  descr    := "Controls the maximum number of steps for the `cbv` tactic."
+  descr    := "Controls the maximum number of steps for the `cbv` tactic, 0 means no limit."
 }
 
 def tryEquations : Simproc := fun e => do

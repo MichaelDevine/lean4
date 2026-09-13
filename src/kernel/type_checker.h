@@ -16,6 +16,7 @@ Author: Leonardo de Moura
 #include "kernel/environment.h"
 #include "kernel/local_ctx.h"
 #include "kernel/expr_maps.h"
+#include "kernel/expr_whnf_cache.h"
 #include "kernel/equiv_manager.h"
 
 namespace lean {
@@ -25,12 +26,13 @@ class type_checker {
 public:
     class state {
         typedef expr_map<expr> infer_cache;
+        typedef expr_whnf_cache whnf_cache;
         typedef lean::unordered_set<expr_pair, expr_pair_hash, expr_pair_eq> expr_pair_set;
         environment               m_env;
         name_generator            m_ngen;
         infer_cache               m_infer_type[2];
-        expr_map<expr>            m_whnf_core;
-        expr_map<expr>            m_whnf;
+        whnf_cache                m_whnf_core;
+        whnf_cache                m_whnf;
         equiv_manager             m_eqv_manager;
         expr_pair_set             m_failure;
         expr_map<expr>            m_unfold;
