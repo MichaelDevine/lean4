@@ -48,11 +48,12 @@ struct arithmetic_memory {
     index m_value_capacity = 0;
     arithmetic_frame * m_frames = nullptr;
     index m_frame_capacity = 0;
+    index m_column_capacity = 0;
 };
 
 enum class outcome : std::uint8_t {
     running, complete, unsupported, need_arguments, need_bindings, invalid,
-    need_frames, need_values
+    need_frames, need_values, need_columns, product_ready
 };
 
 /** All machine state is explicit, index-based and relocatable. The caller
@@ -72,6 +73,7 @@ struct machine {
     index m_num_frames = 0;
     index m_num_values = 0;
     index m_required_values = 0;
+    index m_required_columns = 0;
     natural_reference m_value;
     bool m_has_value = false;
 
@@ -94,7 +96,42 @@ struct machine {
         return {data == nullptr ? nullptr : data + r.m_offset, r.m_size};
     }
 
-    outcome return_value(arithmetic_memory memory) {
+    outcome accept_natural_result(natural_result result) {
+        if (result.m_status == natural_status::need_space) {
+            if (result.m_size > UINT64_MAX - m_num_values) return outcome::invalid;
+            m_required_values = m_num_values + result.m_size;
+            return outcome::need_values;
+        }
+        if (result.m_status != natural_status::complete) return outcome::invalid;
+        m_value = {m_num_values, result.m_size, true};
+        m_num_values += result.m_size;
+        m_required_values = 0;
+        m_required_columns = 0;
+        --m_num_frames;
+        return outcome::running;
+    }
+
+    /** The backend may distribute a ready product's columns without leaving
+        this region. This is a work request, not a completed reduction. Both
+        operands and the pending frame remain unchanged until completion. */
+    outcome finish_product(arithmetic_memory memory, natural_column const * columns, index count) {
+        if (!m_has_value || m_num_arguments != 0 || m_num_frames == 0 ||
+            m_num_frames > memory.m_frame_capacity || memory.m_frames == nullptr ||
+            m_num_values > memory.m_value_capacity ||
+            !valid_reference(m_value, memory)) return outcome::invalid;
+        auto const & frame = memory.m_frames[m_num_frames - 1];
+        if (!frame.m_have_left || frame.m_operation != opcode::natural_multiply ||
+            !valid_reference(frame.m_value, memory)) return outcome::invalid;
+        auto a = view(frame.m_value, memory), b = view(m_value, memory);
+        if (a.m_size > UINT64_MAX - b.m_size) return outcome::invalid;
+        auto expected = a.m_size == 0 || b.m_size == 0 ? 0 : a.m_size + b.m_size;
+        if (count != expected || count > memory.m_column_capacity) return outcome::invalid;
+        auto destination = memory.m_values == nullptr ? nullptr : memory.m_values + m_num_values;
+        return accept_natural_result(finish_natural_product(columns, count, destination,
+                                                            memory.m_value_capacity - m_num_values));
+    }
+
+    outcome return_value(arithmetic_memory memory, bool defer_products) {
         if (m_num_arguments != 0) return outcome::unsupported;
         if (!valid_reference(m_value, memory)) return outcome::invalid;
         if (m_num_frames == 0) return outcome::complete;
@@ -110,6 +147,19 @@ struct machine {
         auto a = view(frame.m_value, memory), b = view(m_value, memory);
         auto destination = memory.m_values == nullptr ? nullptr : memory.m_values + m_num_values;
         auto available = memory.m_value_capacity - m_num_values;
+        if (defer_products && frame.m_operation == opcode::natural_multiply &&
+            a.m_size != 0 && b.m_size != 0) {
+            if (a.m_size > UINT64_MAX - b.m_size) return outcome::invalid;
+            auto count = a.m_size + b.m_size;
+            if (available < count) return accept_natural_result({natural_status::need_space, count});
+            m_required_values = 0;
+            if (memory.m_column_capacity < count) {
+                m_required_columns = count;
+                return outcome::need_columns;
+            }
+            m_required_columns = 0;
+            return outcome::product_ready;
+        }
         natural_result result{natural_status::invalid, 0};
         switch (frame.m_operation) {
         case opcode::natural_add: result = add_natural(a, b, destination, available); break;
@@ -117,23 +167,13 @@ struct machine {
         case opcode::natural_multiply: result = multiply_natural(a, b, destination, available); break;
         default: return outcome::invalid;
         }
-        if (result.m_status == natural_status::need_space) {
-            if (result.m_size > UINT64_MAX - m_num_values) return outcome::invalid;
-            m_required_values = m_num_values + result.m_size;
-            return outcome::need_values;
-        }
-        if (result.m_status != natural_status::complete) return outcome::invalid;
-        m_value = {m_num_values, result.m_size, true};
-        m_num_values += result.m_size;
-        m_required_values = 0;
-        --m_num_frames;
-        return outcome::running;
+        return accept_natural_result(result);
     }
 
     outcome step(instruction const * code, index code_size,
                  closure * arguments, index argument_capacity,
                  binding * bindings, index binding_capacity,
-                 arithmetic_memory memory = {}) {
+                 arithmetic_memory memory = {}, bool defer_products = false) {
         if (m_control.m_code >= code_size || m_num_arguments > argument_capacity ||
             m_num_bindings > binding_capacity ||
             m_num_frames > memory.m_frame_capacity || m_num_values > memory.m_value_capacity ||
@@ -144,7 +184,7 @@ struct machine {
             (memory.m_literal_count != 0 && memory.m_literals == nullptr) ||
             (m_control.m_env != no_binding && m_control.m_env >= m_num_bindings))
             return outcome::invalid;
-        if (m_has_value) return return_value(memory);
+        if (m_has_value) return return_value(memory, defer_products);
         instruction const & n = code[m_control.m_code];
         switch (n.m_op) {
         case opcode::unsupported:

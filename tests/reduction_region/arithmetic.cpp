@@ -60,6 +60,11 @@ static void run_arithmetic_controls(Backend & backend, environment const & env) 
         mk_let(name("unused"), type, unused, nested, false),
         mk_app(first, nested), mk_app(first, mk_bvar(0))
     };
+    nat wide_base(2u), wide_exponent(16384u);
+    nat wide_value(nat_pow(wide_base.raw(), wide_exponent.raw()));
+    expr wide = mk_lit(literal(wide_value - nat(1u)));
+    cases.push_back(binary("mul", wide, wide));
+    cases.push_back(binary("sub", binary("add", binary("mul", wide, wide), wide), seven));
     expr chain = large;
     for (unsigned i = 0; i < 128; ++i)
         chain = binary("add", binary("mul", chain, seven), large);
@@ -70,7 +75,8 @@ static void run_arithmetic_controls(Backend & backend, environment const & env) 
         // control requires the nested chain to complete in one submission.
         auto count = session.program_size();
         if (reason == outcome::running)
-            return optional<reduction_workspace>({count, count, count, count * (session.literal_size() + 1) * 4});
+            return optional<reduction_workspace>({count, count, count,
+                count * (session.literal_size() + 1) * 4, count * (session.literal_size() + 1) * 4});
         return optional<reduction_workspace>();
     };
     closure_reduction_extension extension(counted, admission);
@@ -89,6 +95,17 @@ static void run_arithmetic_controls(Backend & backend, environment const & env) 
         require(is_bi_equal(actual, expected), "actual checker arithmetic result differs from CPU");
         ++checks;
     }
+#ifdef LEAN_REDUCTION_ARITHMETIC_GPU
+#ifdef LEAN_REDUCTION_ARITHMETIC_SCALAR
+    require(backend.work_group_size() == 1 && backend.last_cooperative_products() == 0,
+            "scalar GPU control used cooperative execution");
+#else
+    require(backend.work_group_size() > 1 && backend.last_cooperative_products() == 128,
+            "nested arithmetic did not actually distribute its products");
+#endif
+    std::printf("gpu_group_size=%zu cooperative_products=%llu\n", backend.work_group_size(),
+                static_cast<unsigned long long>(backend.last_cooperative_products()));
+#endif
 
     // The same primitive must not be numerically reduced by core WHNF.
     for (unsigned flags = 0; flags < 4; ++flags) {
@@ -103,15 +120,16 @@ static void run_arithmetic_controls(Backend & backend, environment const & env) 
     // Genuine shortage/recovery: preserve computed operands through repeated
     // frame/result allocation, including an injected failed submission.
     reduction_session session(nested, 0, 0, reduction_mode::full(), &env);
-    bool saw_frames = false, saw_values = false, injected = false;
+    bool saw_frames = false, saw_values = false, saw_columns = false, injected = false;
     while (true) {
         auto status = session.advance(backend);
         if (status == outcome::complete) break;
         require(status == outcome::need_arguments || status == outcome::need_bindings ||
-                status == outcome::need_frames || status == outcome::need_values,
+                status == outcome::need_frames || status == outcome::need_values || status == outcome::need_columns,
                 "unexpected arithmetic continuation outcome");
         saw_frames |= status == outcome::need_frames;
         saw_values |= status == outcome::need_values;
+        saw_columns |= status == outcome::need_columns;
         if (status == outcome::need_values && session.state().m_num_values != 0 && !injected) {
             expr before = session.reconstruct();
             auto used = session.state().m_num_values;
@@ -141,9 +159,15 @@ static void run_arithmetic_controls(Backend & backend, environment const & env) 
             session.argument_capacity() + (status == outcome::need_arguments),
             session.binding_capacity() + (status == outcome::need_bindings),
             session.frame_capacity() + (status == outcome::need_frames),
-            std::max<reduction::index>(session.value_capacity(), session.state().m_required_values));
+            std::max<reduction::index>(session.value_capacity(), session.state().m_required_values),
+            std::max<reduction::index>(session.column_capacity(), session.state().m_required_columns));
     }
     require(saw_frames && saw_values && injected, "arithmetic recovery paths were not exercised");
+#if defined(LEAN_REDUCTION_ARITHMETIC_GPU) && !defined(LEAN_REDUCTION_ARITHMETIC_SCALAR)
+    require(saw_columns, "cooperative scratch recovery was not exercised");
+#else
+    require(!saw_columns, "scalar arithmetic unexpectedly demanded parallel scratch");
+#endif
     type_checker cpu(env);
     require(is_bi_equal(session.reconstruct(), cpu.whnf(nested)), "resumed arithmetic changed the result");
 
@@ -189,7 +213,11 @@ int main() {
     auto raw = lean_io_result_get_value(created); lean_inc(raw); lean_dec(created);
     environment env(lean_elab_environment_to_kernel_env(raw));
 #ifdef LEAN_REDUCTION_ARITHMETIC_GPU
+#ifdef LEAN_REDUCTION_ARITHMETIC_SCALAR
+    reduction_sycl_backend backend(reduction_sycl_execution::scalar);
+#else
     reduction_sycl_backend backend;
+#endif
 #else
     reduction_cpu_backend backend;
 #endif

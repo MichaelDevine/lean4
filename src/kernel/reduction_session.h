@@ -28,6 +28,7 @@ class reduction_session {
     std::vector<reduction::binding> m_bindings;
     std::vector<reduction::natural_limb> m_values;
     std::vector<reduction::arithmetic_frame> m_frames;
+    std::size_t m_columns = 0;
 public:
     reduction_session(expr const & root, std::size_t arguments, std::size_t bindings,
                       reduction_mode mode = reduction_mode::full(), environment const * env = nullptr):
@@ -41,9 +42,10 @@ public:
     std::size_t frame_capacity() const { return m_frames.size(); }
     std::size_t value_capacity() const { return m_values.size(); }
     std::size_t literal_size() const { return m_literals.size(); }
+    std::size_t column_capacity() const { return m_columns; }
 
     void resize_workspace(std::size_t arguments, std::size_t bindings,
-                          std::size_t frames = 0, std::size_t values = 0) {
+                          std::size_t frames = 0, std::size_t values = 0, std::size_t columns = 0) {
         if (arguments < m_machine.m_num_arguments || bindings < m_machine.m_num_bindings ||
             frames < m_machine.m_num_frames || values < m_machine.m_num_values)
             throw std::invalid_argument("cannot discard live reduction workspace");
@@ -60,6 +62,7 @@ public:
         m_bindings.swap(new_bindings);
         m_frames.swap(new_frames);
         m_values.swap(new_values);
+        m_columns = columns;
     }
 
     template<typename Backend> reduction::outcome advance(Backend & backend) {
@@ -68,13 +71,14 @@ public:
         auto bindings = m_bindings;
         auto frames = m_frames;
         auto values = m_values;
-        reduction::arithmetic_workspace arithmetic{m_literals, values, frames};
+        reduction::arithmetic_workspace arithmetic{m_literals, values, frames, m_columns};
         auto status = backend(m_code, next, arguments, bindings, arithmetic);
         using reduction::outcome;
         switch (status) {
         case outcome::running: case outcome::complete: case outcome::unsupported:
         case outcome::need_arguments: case outcome::need_bindings:
         case outcome::need_frames: case outcome::need_values:
+        case outcome::need_columns:
             break;
         default:
             return outcome::invalid;

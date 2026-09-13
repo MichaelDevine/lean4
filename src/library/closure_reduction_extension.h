@@ -16,6 +16,7 @@ struct reduction_workspace {
     std::size_t m_bindings;
     std::size_t m_frames = 0;
     std::size_t m_values = 0;
+    std::size_t m_columns = 0;
 };
 
 enum class reduction_attempt {
@@ -53,6 +54,8 @@ class closure_reduction_extension : public reduction_extension {
              workspace->m_frames <= session.frame_capacity()) ||
             (reason == reduction::outcome::need_values &&
              workspace->m_values <= session.value_capacity()) ||
+            (reason == reduction::outcome::need_columns &&
+             workspace->m_columns <= session.column_capacity()) ||
             (reason == reduction::outcome::need_arguments &&
              workspace->m_arguments <= session.argument_capacity()) ||
             (reason == reduction::outcome::need_bindings &&
@@ -61,7 +64,7 @@ class closure_reduction_extension : public reduction_extension {
             return false;
         }
         session.resize_workspace(workspace->m_arguments, workspace->m_bindings,
-                                 workspace->m_frames, workspace->m_values);
+                                 workspace->m_frames, workspace->m_values, workspace->m_columns);
         return true;
     }
 
@@ -93,11 +96,13 @@ public:
                 case reduction::outcome::need_bindings:
                 case reduction::outcome::need_frames:
                 case reduction::outcome::need_values:
+                case reduction::outcome::need_columns:
                     if (!admit(session, status)) return none_expr();
                     break;
                 case reduction::outcome::unsupported:
                     m_last = reduction_attempt::unsupported; return none_expr();
                 case reduction::outcome::invalid:
+                case reduction::outcome::product_ready:
                     m_last = reduction_attempt::invalid; return none_expr();
                 }
             }

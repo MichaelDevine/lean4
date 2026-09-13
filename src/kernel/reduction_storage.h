@@ -16,10 +16,12 @@ struct arithmetic_workspace {
     std::vector<natural_limb> const & m_literals;
     std::vector<natural_limb> & m_values;
     std::vector<arithmetic_frame> & m_frames;
+    // Scratch is not checkpoint data: it is rebuilt after a resource stop.
+    std::size_t m_columns = 0;
 
     arithmetic_memory memory() const {
         return {m_literals.data(), m_literals.size(), m_values.data(), m_values.size(),
-                m_frames.data(), m_frames.size()};
+                m_frames.data(), m_frames.size(), m_columns};
     }
 };
 
