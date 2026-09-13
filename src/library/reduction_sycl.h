@@ -11,6 +11,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 namespace lean {
 
 enum class reduction_sycl_execution { scalar, cooperative };
+enum class reduction_sycl_storage { automatic, buffers, resident };
 
 /** Optional GPU backend, compiled separately from Lean's host runtime.
     Neither SYCL nor Lean object types cross this boundary. Device selection
@@ -25,15 +26,20 @@ enum class reduction_sycl_execution { scalar, cooperative };
     its own status and workspace; no device-wide barrier couples progress.
     Submission is currently synchronous: results become host-visible together
     after all groups stop. This is not asynchronous checkpoint publication.
-    This transport still uploads each submission; residency is unfinished. */
+    Automatic storage uses reusable device allocations when supported, otherwise
+    the portable buffer transport. Reusing storage never implies cached input
+    validity: each call refreshes immutable inputs and live mutable prefixes.
+    The host session remains the authoritative recovery checkpoint. */
 class reduction_sycl_backend {
     class imp;
     std::unique_ptr<imp> m_imp;
     reduction_sycl_execution m_execution;
     bool m_profiling;
+    reduction_sycl_storage m_storage;
 public:
     explicit reduction_sycl_backend(reduction_sycl_execution execution = reduction_sycl_execution::cooperative,
-                                    bool profiling = false);
+                                    bool profiling = false,
+                                    reduction_sycl_storage storage = reduction_sycl_storage::automatic);
     ~reduction_sycl_backend();
     reduction_sycl_backend(reduction_sycl_backend const &) = delete;
     reduction_sycl_backend & operator=(reduction_sycl_backend const &) = delete;
@@ -43,6 +49,15 @@ public:
     // Optional device-event measurement. Disabled by default; never a result
     // validity condition or an estimate of complete checker cost.
     std::optional<std::uint64_t> last_kernel_nanoseconds() const;
+    bool uses_resident_storage() const;
+    std::size_t retained_device_bytes() const;
+    // Explicit resident payload copies, not physical bus traffic or implicit
+    // buffer-runtime copies. Zero when no resident submission completed.
+    std::size_t last_explicit_upload_bytes() const;
+    std::size_t last_explicit_download_bytes() const;
+    // Release idle workspace while retaining the queue/compiled kernels.
+    // Sessions are independently owned and remain resumable.
+    void release_storage();
     std::vector<reduction::outcome> submit(std::vector<reduction::submission> & requests);
     reduction::outcome operator()(std::vector<reduction::instruction> const & code,
                                   reduction::machine & state,

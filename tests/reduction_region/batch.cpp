@@ -49,6 +49,18 @@ template<typename Backend> struct invalid_input_batch {
         return m_backend.submit(requests);
     }
 };
+template<typename Backend> struct invalid_count_batch {
+    Backend & m_backend;
+    unsigned m_case;
+    std::vector<outcome> submit(std::vector<submission> & requests) {
+        auto & r = requests[0];
+        if (m_case == 0) r.m_state.m_num_arguments = r.m_arguments.size() + 1;
+        if (m_case == 1) r.m_state.m_num_bindings = r.m_bindings.size() + 1;
+        if (m_case == 2) r.m_state.m_num_values = r.m_arithmetic.m_values.size() + 1;
+        if (m_case == 3) r.m_state.m_num_frames = r.m_arithmetic.m_frames.size() + 1;
+        return m_backend.submit(requests);
+    }
+};
 struct malformed_batch {
     unsigned m_case;
     std::vector<outcome> submit(std::vector<submission> & requests) {
@@ -178,6 +190,17 @@ template<typename Backend> void run_controls(Backend & backend, environment cons
             results[1] == outcome::complete && is_bi_equal(good_input.reconstruct(), expected[9]),
             "invalid device input contaminated its sibling or committed");
 
+    for (unsigned fault = 0; fault < 4; ++fault) {
+        reduction_session a(inputs[10], 0, 0, reduction_mode::full(), &env);
+        reduction_session b(inputs[9], 0, 0, reduction_mode::full(), &env);
+        provision(a); provision(b);
+        invalid_count_batch corrupt_count{backend, fault};
+        results = reduction_session::advance_batch(std::vector<reduction_session *>{&a, &b}, corrupt_count);
+        require(results[0] == outcome::invalid && is_bi_equal(a.reconstruct(), inputs[10]) &&
+                results[1] == outcome::complete && is_bi_equal(b.reconstruct(), expected[9]),
+                "invalid live counter was copied or contaminated its sibling");
+    }
+
     for (unsigned fault = 0; fault < 3; ++fault) {
         reduction_session a(inputs[10], 0, 0, reduction_mode::full(), &env);
         reduction_session b(inputs[9], 0, 0, reduction_mode::full(), &env);
@@ -217,6 +240,64 @@ template<typename Backend> void run_controls(Backend & backend, environment cons
     std::printf("independent region batch checks passed: %zu; mixed_recovery=yes; transactional=yes\n", sessions.size());
 }
 
+#ifdef LEAN_REDUCTION_BATCH_GPU
+static void run_storage_controls(reduction_sycl_backend & backend, environment const & env) {
+    nat base(2u), exponent(4096u);
+    nat value(nat_pow(base.raw(), exponent.raw()));
+    auto input = [&](unsigned offset) {
+        auto a = mk_lit(literal(value - nat(offset)));
+        return binary("add", binary("mul", a, a), a);
+    };
+    auto evaluate = [&](expr const & root, std::size_t spare) {
+        reduction_session s(root, 0, 0, reduction_mode::full(), &env);
+        provision(s);
+        s.resize_workspace(s.argument_capacity() + spare, s.binding_capacity() + spare,
+                           s.frame_capacity() + spare, s.value_capacity() + spare, s.column_capacity() + spare);
+        type_checker checker(env);
+        auto result = s.advance(backend);
+        require(result == outcome::complete && is_bi_equal(s.reconstruct(), checker.whnf(root)),
+                "storage reuse changed a newly captured expression");
+        return std::make_pair(backend.last_explicit_upload_bytes(), backend.last_explicit_download_bytes());
+    };
+    auto original = evaluate(input(1), 0);
+    auto small_bytes = backend.retained_device_bytes();
+    // A large unused tail must not become transferred live data. Changing the
+    // fresh input at equal dimensions catches stale device-content reuse.
+    auto padded = evaluate(input(3), 65536);
+    auto large_bytes = backend.retained_device_bytes();
+    if (backend.uses_resident_storage()) {
+        require(original.first > 0 && original.second > 0 && original == padded,
+                "resident copies scale with unused capacity rather than live data");
+        require(large_bytes > small_bytes, "resident workspace growth was not recorded");
+        evaluate(input(5), 65536);
+        require(backend.retained_device_bytes() == large_bytes, "same-shape work grew retained allocations");
+        evaluate(input(7), 0);
+        require(backend.retained_device_bytes() == large_bytes, "smaller work did not reuse retained allocations");
+    } else {
+        require(original == std::make_pair(std::size_t(0), std::size_t(0)) && small_bytes == 0 && large_bytes == 0,
+                "buffer transport claimed explicit resident bytes");
+    }
+#ifdef LEAN_REDUCTION_BATCH_RESIDENT
+    require(backend.uses_resident_storage(), "explicit resident control silently changed transport");
+#endif
+#ifdef LEAN_REDUCTION_BATCH_BUFFERS
+    require(!backend.uses_resident_storage(), "explicit buffer control silently changed transport");
+#endif
+    reduction_session suspended(input(9), 0, 0, reduction_mode::full(), &env);
+    require(suspended.advance(backend) == outcome::need_arguments, "release control did not save a continuation");
+    auto width = backend.work_group_size();
+    backend.release_storage();
+    require(backend.retained_device_bytes() == 0 && backend.work_group_size() == width,
+            "release retained workspace or discarded the initialized kernel");
+    backend.release_storage(); // idle release is repeatable
+    provision(suspended);
+    type_checker checker(env);
+    require(suspended.advance(backend) == outcome::complete &&
+            is_bi_equal(suspended.reconstruct(), checker.whnf(input(9))),
+            "releasing device storage lost an independent host checkpoint");
+}
+#endif
+
 int main() {
     initialize_runtime_module(); lean_initialize(); lean_io_mark_end_initialization();
     auto created = l_Lean_mkEmptyEnvironment(0);
@@ -226,6 +307,10 @@ int main() {
 #ifdef LEAN_REDUCTION_BATCH_GPU
 #ifdef LEAN_REDUCTION_BATCH_SCALAR
     reduction_sycl_backend backend(reduction_sycl_execution::scalar);
+#elif defined(LEAN_REDUCTION_BATCH_RESIDENT)
+    reduction_sycl_backend backend(reduction_sycl_execution::cooperative, false, reduction_sycl_storage::resident);
+#elif defined(LEAN_REDUCTION_BATCH_BUFFERS)
+    reduction_sycl_backend backend(reduction_sycl_execution::cooperative, false, reduction_sycl_storage::buffers);
 #else
     reduction_sycl_backend backend;
 #endif
@@ -233,4 +318,7 @@ int main() {
     reduction_cpu_backend backend;
 #endif
     run_controls(backend, env);
+#ifdef LEAN_REDUCTION_BATCH_GPU
+    run_storage_controls(backend, env);
+#endif
 }

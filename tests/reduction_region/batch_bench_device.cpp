@@ -1,5 +1,6 @@
 /* Captured-region throughput, not a whole-proof performance claim.
-   Arguments: bits, region count, repetitions, CPU workers (fixture settings). */
+   Arguments: bits, region count, repetitions, CPU workers, storage
+   (auto, buffers or resident). These are fixture settings, not defaults. */
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -27,11 +28,13 @@ static expr binary(char const * op, expr const & a, expr const & b) {
 }
 
 int main(int argc, char ** argv) {
-    if (argc > 5) return 2;
+    if (argc > 6) return 2;
     auto bits = argc > 1 ? std::stoull(argv[1]) : 16384;
     auto count = argc > 2 ? std::stoull(argv[2]) : 128;
     auto repeats = argc > 3 ? std::stoull(argv[3]) : 3;
     auto workers = argc > 4 ? std::stoull(argv[4]) : std::max(1u, std::thread::hardware_concurrency());
+    std::string storage = argc > 5 ? argv[5] : "auto";
+    require(storage == "auto" || storage == "buffers" || storage == "resident", "unknown fixture storage choice");
     require(bits >= 4 && count > 0 && repeats > 0 && workers > 0 && count <= SIZE_MAX / 8,
             "positive fixture sizes and at least four bits are required");
     workers = std::min(workers, count);
@@ -58,7 +61,9 @@ int main(int argc, char ** argv) {
     // Apply the same representation before every timed path, including GPU.
     lean_mark_mt(env.raw());
     for (auto const & input : inputs) lean_mark_mt(input.raw());
-    reduction_sycl_backend gpu(reduction_sycl_execution::cooperative, true);
+    reduction_sycl_backend gpu(reduction_sycl_execution::cooperative, true,
+        storage == "buffers" ? reduction_sycl_storage::buffers :
+        (storage == "resident" ? reduction_sycl_storage::resident : reduction_sycl_storage::automatic));
     using clock = std::chrono::steady_clock;
     auto run = [&](unsigned mode, char const * phase, unsigned long long round) {
         auto start = clock::now();
@@ -124,11 +129,15 @@ int main(int argc, char ** argv) {
             require(gpu.last_region_count() == count && gpu.last_cooperative_products() == 2 * count &&
                     gpu.last_kernel_nanoseconds().has_value(),
                     "timed GPU batch did not distribute every region and product");
-        std::printf("phase=%s round=%llu mode=%s bits=%llu regions=%llu cpu_workers=%llu elapsed_ms=%.6f prepare_ms=%.6f submit_ms=%.6f reconstruct_ms=%.6f kernel_ms=%.6f\n",
+        std::printf("phase=%s round=%llu mode=%s bits=%llu regions=%llu cpu_workers=%llu elapsed_ms=%.6f prepare_ms=%.6f submit_ms=%.6f reconstruct_ms=%.6f kernel_ms=%.6f storage=%s retained_bytes=%zu upload_bytes=%zu download_bytes=%zu\n",
                     phase, round, mode == 0 ? "cpu-serial" : (mode == 1 ? "cpu-parallel" : "gpu-batch"),
                     bits, count, workers, std::chrono::duration<double, std::milli>(end - start).count(),
                     prepare_ms, submit_ms, reconstruct_ms,
-                    mode == 2 ? *gpu.last_kernel_nanoseconds() / 1000000.0 : 0);
+                    mode == 2 ? *gpu.last_kernel_nanoseconds() / 1000000.0 : 0,
+                    mode == 2 ? (gpu.uses_resident_storage() ? "resident" : "buffers") : "cpu",
+                    mode == 2 ? gpu.retained_device_bytes() : 0,
+                    mode == 2 ? gpu.last_explicit_upload_bytes() : 0,
+                    mode == 2 ? gpu.last_explicit_download_bytes() : 0);
         std::fflush(stdout);
     };
     for (unsigned mode = 0; mode < 3; ++mode) run(mode, "cold", 0);
