@@ -1,0 +1,1 @@
+def world : String := "world"

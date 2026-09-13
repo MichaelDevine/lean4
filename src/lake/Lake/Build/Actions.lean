@@ -33,6 +33,7 @@ public def compileLeanModule
   (leanPath : SearchPath := [])
   (lean : FilePath := "lean")
   (leanir : FilePath := "leanir")
+  (compactSetup : Bool := false)
 : LogIO Unit := do
   let mut args := leanArgs.push leanFile.toString
   if let some oleanFile := arts.olean? then
@@ -51,7 +52,9 @@ public def compileLeanModule
     createParentDirs bcFile
     args := args ++ #["-b", bcFile.toString]
   createParentDirs setupFile
-  IO.FS.writeFile setupFile (toJson setup).pretty
+  -- Both forms decode to the same `ModuleSetup`; see `BuildConfig.compactSetup`.
+  let setupJson := toJson setup
+  IO.FS.writeFile setupFile (if compactSetup then setupJson.compress else setupJson.pretty)
   args := args ++ #["--setup", setupFile.toString]
   args := args.push "--json"
   withLogErrorPos do

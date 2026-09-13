@@ -57,6 +57,7 @@ BASIC OPTIONS:
   --keep-toolchain      do not update toolchain on workspace update
   --allow-empty         accept bare builds with no default targets configured
   --no-build            exit immediately if a build target is not up-to-date
+  --compact-setup       write module setup files as compact JSON
   --no-cache            build packages locally; do not download build caches
   --try-cache           attempt to download build caches for supported packages
   --json, -J            output JSON-formatted results (in `lake query`)

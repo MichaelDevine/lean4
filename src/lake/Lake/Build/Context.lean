@@ -21,6 +21,16 @@ public structure BuildConfig extends LogConfig where
   trustHash : Bool := true
   /-- Early exit if a target has to be rebuilt. -/
   noBuild : Bool := false
+  /--
+  Write module setup files as compact JSON instead of pretty-printed JSON.
+
+  The setup file is machine-readable input for `lean` and `leanir`, which parse
+  it with `ModuleSetup.load`; both forms decode to the same `ModuleSetup`. The
+  pretty form remains the default because it is what a reader expects to find on
+  disk, while a large build may prefer the compact form, whose serialization is
+  substantially cheaper for setups dominated by transitive import artifacts.
+  -/
+  compactSetup : Bool := false
   /-- Verbosity level (`-q`, `-v`, or neither). -/
   verbosity : Verbosity := .normal
   /-- Whether to print a message when the build finishes successfully (if not quiet). -/
@@ -93,6 +103,9 @@ public instance [Pure m] : MonadLift LakeM (BuildT m) where
 
 @[inline] public def getNoBuild [Functor m] [MonadBuild m] : m Bool :=
   (·.noBuild) <$> getBuildConfig
+
+@[inline] public def getCompactSetup [Functor m] [MonadBuild m] : m Bool :=
+  (·.compactSetup) <$> getBuildConfig
 
 @[inline] public def getVerbosity [Functor m] [MonadBuild m] : m Verbosity :=
   (·.verbosity) <$> getBuildConfig

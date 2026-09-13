@@ -1,0 +1,8 @@
+name = "compactSetup"
+defaultTargets = ["A"]
+
+[[lean_lib]]
+name = "A"
+
+[[lean_lib]]
+name = "B"
