@@ -7,6 +7,9 @@ Released under Apache 2.0 license as described in the file LICENSE.
 #include "kernel/reduction_region.h"
 #include "kernel/reduction_machine.h"
 #include "kernel/reduction_literal.h"
+#include "kernel/reduction_primitive.h"
+#include "kernel/instantiate.h"
+#include "kernel/expr_maps.h"
 
 namespace lean {
 
@@ -14,7 +17,9 @@ namespace lean {
     remain owned by the arena. Full-mode numeric literals also get exact limb
     storage, and supported primitives are classified against the supplied
     immutable environment during lowering. Without that snapshot, primitives
-    remain boundaries. General unfolding and recursors are not supported yet. */
+    remain boundaries. Full-mode definition bodies are instantiated/captured,
+    not evaluated during lowering; the machine unfolds them only on demand.
+    General recursor and projection evaluation remains unsupported. */
 inline std::vector<reduction::instruction> make_reduction_program(
     reduction_region & region, std::vector<reduction::natural_limb> & literals,
     reduction_mode mode, environment const * env = nullptr) {
@@ -22,6 +27,9 @@ inline std::vector<reduction::instruction> make_reduction_program(
     std::vector<instruction> code;
     std::vector<reduction_region::node_id> todo{region.root()};
     std::vector<bool> visited;
+    // Exact constant/universe instances share captured immutable code, not
+    // evaluated results. This cache is local to one environment snapshot.
+    expr_map<reduction_region::node_id> definitions;
     expr nat_zero, nat_add, nat_sub, nat_mul;
     bool zero_supported = false, add_supported = false, sub_supported = false, mul_supported = false;
     if (!mode.is_core()) {
@@ -93,6 +101,24 @@ inline std::vector<reduction::instruction> make_reduction_program(
                 if (add_supported && e == nat_add) n.m_op = opcode::natural_add;
                 if (sub_supported && e == nat_sub) n.m_op = opcode::natural_subtract;
                 if (mul_supported && e == nat_mul) n.m_op = opcode::natural_multiply;
+                if (n.m_op == opcode::unsupported && env != nullptr &&
+                    classify_reduction_primitive(e, 1) == reduction_primitive::none &&
+                    classify_reduction_primitive(e, 2) == reduction_primitive::none) {
+                    auto info = env->find(const_name(e));
+                    // Match is_delta/unfold_definition_core exactly: opaque
+                    // bodies are excluded; universe arity must be correct.
+                    if (info && info->has_value() && length(const_levels(e)) == info->get_num_lparams()) {
+                        auto it = definitions.find(e);
+                        reduction_region::node_id body;
+                        if (it != definitions.end()) body = it->second;
+                        else {
+                            body = region.capture(instantiate_value_lparams(*info, const_levels(e)));
+                            definitions.emplace(e, body);
+                        }
+                        todo.push_back(body);
+                        n.m_op = opcode::definition; n.m_first = body;
+                    }
+                }
             }
             break;
         case expr_kind::FVar: case expr_kind::MVar: case expr_kind::Proj:

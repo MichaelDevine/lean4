@@ -18,7 +18,7 @@ constexpr index no_binding = UINT64_MAX;
     Unsupported operations are boundaries, never successful reductions. */
 enum class opcode : std::uint8_t {
     value, bound, app, lambda, let, alias, unsupported,
-    natural, natural_zero, natural_add, natural_subtract, natural_multiply
+    natural, natural_zero, natural_add, natural_subtract, natural_multiply, definition
 };
 struct instruction {
     opcode m_op;
@@ -261,6 +261,12 @@ struct machine {
         case opcode::alias:
             if (n.m_first >= code_size) return outcome::invalid;
             m_control.m_code = n.m_first;
+            return outcome::running;
+        case opcode::definition:
+            if (n.m_first >= code_size) return outcome::invalid;
+            // Global values capture no caller lexical environment. Arguments
+            // retain their own closures, including the caller's bindings.
+            m_control = {n.m_first, no_binding};
             return outcome::running;
         }
         return outcome::invalid;

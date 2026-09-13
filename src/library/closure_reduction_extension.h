@@ -79,8 +79,9 @@ public:
         m_last = reduction_attempt::declined;
         m_device_error.clear();
         try {
-            // Numeric primitive lowering is full-mode only. Neither mode
-            // unfolds general constants, projections or recursors yet.
+            // Numeric primitives and captured definition unfolding are
+            // full-mode only. Projection/recursor evaluation is not yet
+            // supported; unused captured arguments are still not demanded.
             reduction_session session(e, 0, 0, mode, &env);
             if (!admit(session, reduction::outcome::running)) return none_expr();
             while (true) {

@@ -193,8 +193,9 @@ static void run_arithmetic_controls(Backend & backend, environment const & env) 
                                       reducibility_hints::mk_abbreviation()));
     type_checker shadow_cpu(shadow);
     require(shadow_cpu.whnf(ctor_zero) == sort0, "checked shadow environment setup failed");
-    require(!extension.reduce(shadow, local_ctx(), ctor_zero, reduction_mode::full()),
-            "constructor recognition ignored an environment definition");
+    auto shadow_result = extension.reduce(shadow, local_ctx(), ctor_zero, reduction_mode::full());
+    require(shadow_result && *shadow_result == sort0,
+            "constructor recognition ignored the captured environment definition");
     expr typed_identity = mk_lambda(name("x"), sort1, mk_bvar(0), binder_info::Default);
     type_checker shadow_accelerated(shadow);
     {

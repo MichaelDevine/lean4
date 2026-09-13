@@ -13,6 +13,7 @@ Author: Leonardo de Moura
 #include "util/lbool.h"
 #include "kernel/type_checker.h"
 #include "kernel/reduction_extension.h"
+#include "kernel/reduction_primitive.h"
 #include "kernel/expr_maps.h"
 #include "kernel/instantiate.h"
 #include "kernel/kernel_exception.h"
@@ -574,6 +575,32 @@ optional<expr> type_checker::unfold_definition(expr const & e) {
 static expr * g_lean_reduce_bool = nullptr;
 static expr * g_lean_reduce_nat  = nullptr;
 
+reduction_primitive classify_reduction_primitive(expr const & f, unsigned arity) {
+    using primitive = reduction_primitive;
+    if (!is_constant(f)) return primitive::none;
+    if (arity == 1) {
+        if (f == *g_nat_succ) return primitive::successor;
+        if (f == *g_lean_reduce_bool) return primitive::native_bool;
+        if (f == *g_lean_reduce_nat) return primitive::native_nat;
+    } else if (arity == 2) {
+        if (f == *g_nat_add) return primitive::add;
+        if (f == *g_nat_sub) return primitive::subtract;
+        if (f == *g_nat_mul) return primitive::multiply;
+        if (f == *g_nat_pow) return primitive::power;
+        if (f == *g_nat_gcd) return primitive::gcd;
+        if (f == *g_nat_mod) return primitive::modulo;
+        if (f == *g_nat_div) return primitive::divide;
+        if (f == *g_nat_beq) return primitive::equal;
+        if (f == *g_nat_ble) return primitive::less_equal;
+        if (f == *g_nat_land) return primitive::bit_and;
+        if (f == *g_nat_lor) return primitive::bit_or;
+        if (f == *g_nat_xor) return primitive::bit_xor;
+        if (f == *g_nat_shiftLeft) return primitive::shift_left;
+        if (f == *g_nat_shiftRight) return primitive::shift_right;
+    }
+    return primitive::none;
+}
+
 namespace ir {
 object * run_boxed_kernel(environment const & env, options const & opts, name const & fn, unsigned n, object **args);
 }
@@ -585,7 +612,8 @@ optional<expr> reduce_native(environment const & env, expr const & e) {
     if (!is_app(e)) return none_expr();
     expr const & arg = app_arg(e);
     if (!is_constant(arg)) return none_expr();
-    if (app_fn(e) == *g_lean_reduce_bool) {
+    auto primitive = classify_reduction_primitive(app_fn(e), 1);
+    if (primitive == reduction_primitive::native_bool) {
         object * r = ir::run_boxed_kernel(env, options(), const_name(arg), 0, nullptr);
         if (!lean_is_scalar(r)) {
             lean_dec_ref(r);
@@ -593,7 +621,7 @@ optional<expr> reduce_native(environment const & env, expr const & e) {
         }
         return lean_unbox(r) == 0 ? some_expr(mk_bool_false()) : some_expr(mk_bool_true());
     }
-    if (app_fn(e) == *g_lean_reduce_nat) {
+    if (primitive == reduction_primitive::native_nat) {
         object * r = ir::run_boxed_kernel(env, options(), const_name(arg), 0, nullptr);
         if (lean_is_scalar(r) || lean_is_mpz(r)) {
             return some_expr(mk_lit(literal(nat(r))));
@@ -648,7 +676,7 @@ optional<expr> type_checker::reduce_nat(expr const & e) {
     unsigned nargs = get_app_num_args(e);
     if (nargs == 1) {
         expr const & f = app_fn(e);
-        if (f == *g_nat_succ) {
+        if (classify_reduction_primitive(f, 1) == reduction_primitive::successor) {
             expr arg = whnf(app_arg(e));
             if (!is_nat_lit_ext(arg)) return none_expr();
             nat v = get_nat_val(arg);
@@ -656,21 +684,23 @@ optional<expr> type_checker::reduce_nat(expr const & e) {
         }
     } else if (nargs == 2) {
         expr const & f = app_fn(app_fn(e));
-        if (!is_constant(f)) return none_expr();
-        if (f == *g_nat_add) return reduce_bin_nat_op(nat_add, e);
-        if (f == *g_nat_sub) return reduce_bin_nat_op(nat_sub, e);
-        if (f == *g_nat_mul) return reduce_bin_nat_op(nat_mul, e);
-        if (f == *g_nat_pow) return reduce_pow(e);
-        if (f == *g_nat_gcd) return reduce_bin_nat_op(nat_gcd, e);
-        if (f == *g_nat_mod) return reduce_bin_nat_op(nat_mod, e);
-        if (f == *g_nat_div) return reduce_bin_nat_op(nat_div, e);
-        if (f == *g_nat_beq) return reduce_bin_nat_pred(nat_eq, e);
-        if (f == *g_nat_ble) return reduce_bin_nat_pred(nat_le, e);
-        if (f == *g_nat_land) return reduce_bin_nat_op(nat_land, e);
-        if (f == *g_nat_lor)  return reduce_bin_nat_op(nat_lor, e);
-        if (f == *g_nat_xor)  return reduce_bin_nat_op(nat_lxor, e);
-        if (f == *g_nat_shiftLeft) return reduce_bin_nat_op(lean_nat_shiftl, e);
-        if (f == *g_nat_shiftRight) return reduce_bin_nat_op(lean_nat_shiftr, e);
+        switch (classify_reduction_primitive(f, 2)) {
+        case reduction_primitive::add: return reduce_bin_nat_op(nat_add, e);
+        case reduction_primitive::subtract: return reduce_bin_nat_op(nat_sub, e);
+        case reduction_primitive::multiply: return reduce_bin_nat_op(nat_mul, e);
+        case reduction_primitive::power: return reduce_pow(e);
+        case reduction_primitive::gcd: return reduce_bin_nat_op(nat_gcd, e);
+        case reduction_primitive::modulo: return reduce_bin_nat_op(nat_mod, e);
+        case reduction_primitive::divide: return reduce_bin_nat_op(nat_div, e);
+        case reduction_primitive::equal: return reduce_bin_nat_pred(nat_eq, e);
+        case reduction_primitive::less_equal: return reduce_bin_nat_pred(nat_le, e);
+        case reduction_primitive::bit_and: return reduce_bin_nat_op(nat_land, e);
+        case reduction_primitive::bit_or: return reduce_bin_nat_op(nat_lor, e);
+        case reduction_primitive::bit_xor: return reduce_bin_nat_op(nat_lxor, e);
+        case reduction_primitive::shift_left: return reduce_bin_nat_op(lean_nat_shiftl, e);
+        case reduction_primitive::shift_right: return reduce_bin_nat_op(lean_nat_shiftr, e);
+        default: break;
+        }
     }
     return none_expr();
 }
