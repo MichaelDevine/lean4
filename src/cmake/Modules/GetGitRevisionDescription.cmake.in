@@ -38,7 +38,8 @@ if(HEAD_CONTENTS MATCHES "ref")
   endif()
 else()
   # detached HEAD
-  configure_file("@GIT_DIR@/HEAD" "@GIT_DATA@/head-ref" COPYONLY)
+  # HEAD_FILE belongs to this worktree; GIT_DIR may be the common directory.
+  configure_file("@HEAD_FILE@" "@GIT_DATA@/head-ref" COPYONLY)
 endif()
 
 if(NOT HEAD_HASH)
